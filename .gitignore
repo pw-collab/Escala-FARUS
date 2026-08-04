@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Credenciais e segredos — NUNCA versionar
+.streamlit/secrets.toml
+*.json.key
+service_account*.json
+credentials*.json
+
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
