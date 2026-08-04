@@ -21,16 +21,34 @@ from escala.dados import (
     ABA_FUNCOES,
     ABA_HISTORICO,
     BaseDados,
+    ConfiguracoesMes,
 )
 from escala.demo import repositorio_demo
-from escala.modelos import TROCA_PENDENTE, Atribuicao, Troca
+from escala.modelos import (
+    FUNCAO_CEIA,
+    FUNCAO_ESCALA_MANUAL,
+    TROCA_PENDENTE,
+    Atribuicao,
+    EscalaManual,
+    Evento,
+    Troca,
+)
 from escala.motor import (
     descrever_pendencia,
+    esta_indisponivel,
     gerar_escala,
     resumo_por_voluntario,
     voluntarios_nao_escalados,
 )
-from escala.textos import competencia, formatar_data, nome_mes, normalizar
+from escala.textos import (
+    competencia,
+    domingos_do_mes,
+    formatar_data,
+    nome_dia_semana,
+    nome_mes,
+    normalizar,
+    parse_lista,
+)
 from escala.whatsapp import gerar_texto_whatsapp
 
 st.set_page_config(
@@ -195,7 +213,27 @@ def rascunho_atual(base: BaseDados) -> list[Atribuicao]:
 # Barra lateral
 # ---------------------------------------------------------------------------
 
-def barra_lateral(base: BaseDados) -> tuple[int, int]:
+def inicializar_mes(base: BaseDados) -> None:
+    """O mês da escala é escolhido na tela de geração e vale para o app todo."""
+    if "cfg_mes" not in st.session_state:
+        st.session_state["cfg_mes"] = base.config.mes or date.today().month
+    if "cfg_ano" not in st.session_state:
+        st.session_state["cfg_ano"] = int(base.config.ano or date.today().year)
+
+
+def mes_selecionado() -> tuple[int, int]:
+    return int(st.session_state["cfg_mes"]), int(st.session_state["cfg_ano"])
+
+
+def config_efetiva(base: BaseDados) -> ConfiguracoesMes:
+    """A configuração montada na tela, quando existir; senão, a da planilha."""
+    da_tela = st.session_state.get("_config_tela")
+    if da_tela is not None and (da_tela.mes, da_tela.ano) == mes_selecionado():
+        return da_tela
+    return base.config
+
+
+def barra_lateral(base: BaseDados) -> None:
     st.sidebar.title("🗓️ Escala")
 
     if st.session_state.get("_modo_demo"):
@@ -219,26 +257,9 @@ def barra_lateral(base: BaseDados) -> tuple[int, int]:
         st.rerun()
 
     st.sidebar.divider()
-    st.sidebar.subheader("Mês da escala")
-
-    mes_padrao = base.config.mes or date.today().month
-    ano_padrao = base.config.ano or date.today().year
-    mes = st.sidebar.selectbox(
-        "Mês",
-        options=list(range(1, 13)),
-        index=mes_padrao - 1,
-        format_func=nome_mes,
-    )
-    ano = st.sidebar.number_input(
-        "Ano", min_value=2020, max_value=2100, value=int(ano_padrao), step=1
-    )
-
-    if (mes, ano) != (base.config.mes, base.config.ano):
-        st.sidebar.caption(
-            f"A planilha indica {competencia(base.config.mes, base.config.ano)}."
-            if base.config.mes and base.config.ano
-            else "A planilha não indica um mês; usando a seleção acima."
-        )
+    mes, ano = mes_selecionado()
+    st.sidebar.metric("Mês da escala", competencia(mes, ano))
+    st.sidebar.caption("Para trocar o mês, use a aba **Gerar escala**.")
 
     st.sidebar.divider()
     st.sidebar.caption(
@@ -246,7 +267,6 @@ def barra_lateral(base: BaseDados) -> tuple[int, int]:
         f"**{len(base.funcoes)}** funções · "
         f"**{len(base.historico)}** linhas de histórico"
     )
-    return int(mes), int(ano)
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +276,7 @@ def barra_lateral(base: BaseDados) -> tuple[int, int]:
 def aba_painel(base: BaseDados, mes: int, ano: int) -> None:
     st.subheader(f"Painel — {competencia(mes, ano)}")
 
-    cultos = montar_cultos(base.config, mes, ano)
+    cultos = montar_cultos(config_efetiva(base), mes, ano)
     colunas = st.columns(4)
     colunas[0].metric("Cultos no mês", len(cultos))
     colunas[1].metric("Voluntários ativos", len(base.voluntarios_ativos))
@@ -340,29 +360,270 @@ def aba_painel(base: BaseDados, mes: int, ano: int) -> None:
         )
 
 
-def aba_gerar(base: BaseDados, mes: int, ano: int) -> None:
-    st.subheader("Gerar escala do mês")
-    st.caption(
-        "O sistema sugere; você decide. Depois de gerar, ajuste qualquer linha "
-        "na tabela abaixo e salve na planilha."
+BASES_DE_EVENTO = ["Domingo", "Oração", "Nenhum"]
+
+
+def _padroes_do_mes(base: BaseDados, mes: int, ano: int) -> ConfiguracoesMes:
+    """Valores iniciais dos campos da tela.
+
+    Vêm da planilha quando ela já está no mês escolhido; caso contrário, o mês
+    começa do zero com a Ceia no 1º domingo. Os campos que não aparecem na tela
+    (cobertura coringa, preenchimento até o máximo) são sempre herdados.
+    """
+    if base.config.mes == mes and base.config.ano == ano:
+        return base.config
+
+    padroes = ConfiguracoesMes(
+        mes=mes,
+        ano=ano,
+        alvos_coringa=list(base.config.alvos_coringa),
+        preencher_maximo=base.config.preencher_maximo,
+    )
+    domingos = domingos_do_mes(ano, mes)
+    if domingos:
+        padroes.datas_ceia = [domingos[0]]
+    return padroes
+
+
+def _elegiveis_para(base: BaseDados, funcao: str, dia: date) -> list[str]:
+    return [
+        v.nome
+        for v in base.voluntarios_ativos
+        if v.exerce(funcao) and not esta_indisponivel(v, dia, base.indisponibilidades)
+    ]
+
+
+def painel_configuracao(base: BaseDados) -> ConfiguracoesMes:
+    """Formulário que substitui a edição manual da aba `Configurações do Mês`."""
+    col_mes, col_ano, _ = st.columns([1.2, 1, 2])
+    # O valor inicial vai explícito em `index`/`value`: pré-carregar a
+    # `session_state` da chave do widget não é suficiente para estes dois.
+    atual_mes, atual_ano = mes_selecionado()
+    mes = col_mes.selectbox(
+        "Mês",
+        options=list(range(1, 13)),
+        index=atual_mes - 1,
+        format_func=nome_mes,
+        key="widget_mes",
+    )
+    ano = int(
+        col_ano.number_input(
+            "Ano",
+            min_value=2020,
+            max_value=2100,
+            value=atual_ano,
+            step=1,
+            key="widget_ano",
+        )
+    )
+    st.session_state["cfg_mes"], st.session_state["cfg_ano"] = mes, ano
+    padroes = _padroes_do_mes(base, mes, ano)
+    marca = f"{ano}{mes:02d}"  # trocar de mês reinicia os campos abaixo
+    domingos = domingos_do_mes(ano, mes)
+
+    config = ConfiguracoesMes(
+        mes=mes,
+        ano=ano,
+        alvos_coringa=list(padroes.alvos_coringa),
+        preencher_maximo=padroes.preencher_maximo,
     )
 
-    esquerda, direita = st.columns([1, 3])
-    with esquerda:
-        if st.button("⚙️ Gerar escala do mês", type="primary", use_container_width=True):
-            resultado = gerar_escala(base, mes, ano)
-            st.session_state["_rascunho"] = resultado.atribuicoes
-            st.session_state["_pendencias"] = resultado.pendencias
-            st.session_state["_avisos_geracao"] = resultado.avisos
-            nova_versao_editor()
-            st.rerun()
-    with direita:
-        if base.escala and not st.session_state.get("_rascunho"):
-            st.info(
-                f"Existe uma escala na aba `{ABA_ESCALA}` com "
-                f"{len(base.escala)} linhas. Gerar de novo substitui esse rascunho.",
-                icon="ℹ️",
+    st.markdown("##### Cultos de domingo")
+    nome_manual = FUNCAO_ESCALA_MANUAL if base.funcao_por_nome(FUNCAO_ESCALA_MANUAL) else ""
+    pesos = [1.5, 0.7, 1.0, 3.5]
+
+    titulos = st.columns(pesos)
+    titulos[0].caption("Culto")
+    titulos[1].caption("Ceia")
+    titulos[2].caption("Sem culto")
+    if nome_manual:
+        titulos[3].caption(f"{nome_manual} — escala manual (vazio = automático)")
+
+    ativos: list[date] = []
+    for dia in domingos:
+        colunas = st.columns(pesos, vertical_alignment="center")
+        colunas[0].markdown(f"**{formatar_data(dia)}** · {nome_dia_semana(dia)}")
+
+        sem_culto = colunas[2].toggle(
+            "Sem culto",
+            value=dia in padroes.datas_sem_culto,
+            key=f"cfg_sem_{marca}_{dia.day}",
+            label_visibility="collapsed",
+        )
+        ceia = colunas[1].checkbox(
+            "Ceia",
+            value=padroes.e_ceia(dia),
+            key=f"cfg_ceia_{marca}_{dia.day}",
+            label_visibility="collapsed",
+            disabled=sem_culto,
+        )
+
+        if nome_manual:
+            opcoes = _elegiveis_para(base, nome_manual, dia)
+            anteriores = [
+                n for n in padroes.nomes_manuais(dia, nome_manual) if n in opcoes
+            ]
+            escolhidos = colunas[3].multiselect(
+                nome_manual,
+                options=opcoes,
+                default=anteriores,
+                key=f"cfg_manual_{marca}_{dia.day}",
+                label_visibility="collapsed",
+                placeholder="Automático (rodízio)",
+                disabled=sem_culto,
             )
+            if escolhidos and not sem_culto:
+                config.manuais.append(
+                    EscalaManual(data=dia, funcao=nome_manual, nomes=list(escolhidos))
+                )
+
+        if sem_culto:
+            config.datas_sem_culto.append(dia)
+        else:
+            ativos.append(dia)
+            if ceia:
+                config.datas_ceia.append(dia)
+
+    st.markdown("##### Datas especiais")
+    fixas = base.funcoes_de_data_fixa()
+    colunas = st.columns(max(len(fixas) + 1, 2))
+
+    for indice, funcao in enumerate(fixas):
+        opcoes: list[date | None] = [None, *ativos]
+        atual = padroes.data_da_funcao(funcao.nome)
+        escolha = colunas[indice].selectbox(
+            f"Data do {funcao.nome}",
+            options=opcoes,
+            index=opcoes.index(atual) if atual in opcoes else 0,
+            format_func=lambda d: "— não haverá —" if d is None else formatar_data(d),
+            key=f"cfg_fixa_{marca}_{funcao.chave}",
+        )
+        if escolha is not None:
+            config.datas_por_funcao[funcao.chave] = [escolha]
+
+    oracao = colunas[len(fixas)].date_input(
+        "Data do culto de oração",
+        value=padroes.datas_oracao[0] if padroes.datas_oracao else None,
+        format="DD/MM/YYYY",
+        key=f"cfg_oracao_{marca}",
+    )
+    if oracao:
+        config.datas_oracao = [oracao]
+
+    st.markdown("##### Eventos")
+    st.caption(
+        "Herdam as funções do culto base e somam os cargos listados. "
+        "Use o **+** no fim da tabela para criar um evento."
+    )
+    tabela = pd.DataFrame(
+        [
+            {
+                "Data": e.data,
+                "Nome": e.nome,
+                "Base": e.base or "Nenhum",
+                "Cargos": "; ".join(e.funcoes_extras),
+            }
+            for e in padroes.eventos
+        ],
+        columns=["Data", "Nome", "Base", "Cargos"],
+    )
+    tabela["Data"] = pd.to_datetime(tabela["Data"], errors="coerce")
+    editada = st.data_editor(
+        tabela,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key=f"cfg_eventos_{marca}",
+        column_config={
+            "Data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+            "Nome": st.column_config.TextColumn("Nome"),
+            "Base": st.column_config.SelectboxColumn("Base", options=BASES_DE_EVENTO),
+            "Cargos": st.column_config.TextColumn(
+                "Cargos", help="Funções próprias do evento, separadas por ;"
+            ),
+        },
+    )
+    for _, linha in editada.iterrows():
+        bruto = linha.get("Data")
+        nome = str(linha.get("Nome") or "").strip()
+        if pd.isna(bruto) or not nome:
+            continue
+        rotulo_base = str(linha.get("Base") or "Domingo")
+        config.eventos.append(
+            Evento(
+                data=bruto.date() if hasattr(bruto, "date") else bruto,
+                nome=nome,
+                base="" if rotulo_base == "Nenhum" else rotulo_base,
+                funcoes_extras=parse_lista(linha.get("Cargos")),
+            )
+        )
+
+    # A função da Ceia acompanha os domingos marcados.
+    if config.datas_ceia:
+        config.datas_por_funcao[normalizar(FUNCAO_CEIA)] = list(config.datas_ceia)
+
+    return config
+
+
+def aba_gerar(base: BaseDados) -> None:
+    st.subheader("Gerar escala do mês")
+    st.caption(
+        "O sistema sugere; você decide. Confira as configurações do mês, gere, "
+        "e depois ajuste qualquer linha na tabela antes de salvar."
+    )
+
+    aberta = st.session_state.get("_config_aberta", False)
+    if not aberta:
+        esquerda, direita = st.columns([1, 3])
+        with esquerda:
+            if st.button("⚙️ Gerar escala do mês", type="primary", use_container_width=True):
+                st.session_state["_config_aberta"] = True
+                st.rerun()
+        with direita:
+            if base.escala and not st.session_state.get("_rascunho"):
+                st.info(
+                    f"Existe uma escala na aba `{ABA_ESCALA}` com "
+                    f"{len(base.escala)} linhas. Gerar de novo substitui esse rascunho.",
+                    icon="ℹ️",
+                )
+    else:
+        with st.container(border=True):
+            config = painel_configuracao(base)
+            st.session_state["_config_tela"] = config
+
+            st.divider()
+            col_a, col_b, col_c = st.columns([1.2, 1, 2])
+            gerar = col_a.button("✅ Gerar escala", type="primary", use_container_width=True)
+            if col_b.button("Cancelar", use_container_width=True):
+                st.session_state["_config_aberta"] = False
+                st.rerun()
+            persistir = col_c.checkbox(
+                "Salvar estas configurações na planilha",
+                value=True,
+                help=(
+                    "Mantém a aba `Configurações do Mês` em sincronia com a tela. "
+                    "Campos fora da tela não são alterados."
+                ),
+            )
+
+            if gerar:
+                base.config = config
+                resultado = gerar_escala(base, config.mes, config.ano)
+                erros: list[str] = []
+                if persistir:
+                    try:
+                        servico.salvar_configuracoes(obter_repositorio(), base, config)
+                        invalidar_dados()
+                    except Exception as erro:  # noqa: BLE001
+                        erros.append(f"A escala foi gerada, mas não consegui salvar "
+                                     f"as configurações na planilha: {erro}")
+                st.session_state["_rascunho"] = resultado.atribuicoes
+                st.session_state["_pendencias"] = resultado.pendencias
+                st.session_state["_avisos_geracao"] = resultado.avisos + erros
+                st.session_state["_config_aberta"] = False
+                nova_versao_editor()
+                st.rerun()
+        return  # enquanto configura, a tela fica só no formulário
 
     for aviso in st.session_state.get("_avisos_geracao", []):
         st.warning(aviso, icon="⚠️")
@@ -435,12 +696,17 @@ def aba_whatsapp(base: BaseDados, mes: int, ano: int) -> None:
         st.info("Gere ou carregue uma escala primeiro.")
         return
 
-    col_a, col_b = st.columns(2)
+    col_a, col_b, col_c = st.columns([3, 1.3, 1.3])
     rodape = col_a.text_input(
         "Rodapé (opcional)",
         value="Qualquer imprevisto, avise a coordenação com antecedência 🙏",
     )
-    apenas_um = col_b.checkbox("Gerar só de um culto")
+    mencoes = col_b.checkbox(
+        "Incluir (@ )",
+        value=True,
+        help="Deixa o `(@ )` pronto para você marcar cada pessoa na hora de enviar.",
+    )
+    apenas_um = col_c.checkbox("Gerar só de um culto")
 
     filtradas = atribuicoes
     if apenas_um:
@@ -456,8 +722,9 @@ def aba_whatsapp(base: BaseDados, mes: int, ano: int) -> None:
         mes=mes,
         ano=ano,
         ordem_funcoes=base.ordem_das_funcoes(),
-        data_ceia=base.config.data_ceia,
+        datas_ceia=config_efetiva(base).datas_ceia,
         rodape=rodape.strip(),
+        mencoes=mencoes,
     )
 
     if not texto:
@@ -715,27 +982,38 @@ Para cada culto, em ordem cronológica, e para cada função na ordem da aba
 Cada escolha realimenta o rodízio na hora — por isso a mesma pessoa não se
 repete em cultos seguidos quando existe outra apta.
 
-##### Campos de `{ABA_CONFIG}`
-| Campo | Exemplo | Observação |
-|---|---|---|
-| `Mês/Ano` | `Março/2026` ou `03/2026` | competência da escala |
-| `Data da Ceia` | `1º domingo` ou `01/03` | em branco = 1º domingo; `nenhuma` = sem Ceia |
-| `Data do culto de oração` | `3ª quarta` ou `18/03` | aceita várias datas separadas por `;` |
-| `Data do Infantil 10-12` | `2º domingo` | uma linha `Data do ...` para cada função de data fixa |
-| `Datas sem culto` | `29/03` | pula essas datas |
-| `Funções cobertas por coringa` | `Abertura; Oferta` | padrão se ausente |
-| `Preencher até a quantidade máxima` | `Sim` | `Não` preenche só o mínimo |
-| `Evento` | `27/03 \\| Vigília \\| Oração \\| Recepção; Maná Coffee` | `data \\| nome \\| base \\| funções extras` |
-
-Datas aceitam `01/03/2026`, `01/03`, só o dia (`1`) e expressões como
-`1º domingo`, `última quarta`.
-
 ##### Fluxo do mês
-1. Confira a aba `{ABA_CONFIG}` (datas de Ceia, oração, infantil, eventos).
-2. **Gerar escala do mês** → revise e ajuste o rascunho → **Salvar na planilha**.
+1. **Gerar escala do mês** → confira as configurações na tela (mês, Ceia por
+   domingo, datas especiais, eventos) → **Gerar escala**.
+2. Revise e ajuste o rascunho → **Salvar na planilha**.
 3. **Texto para o WhatsApp** → copiar → colar no grupo.
 4. **Publicar** → grava no `{ABA_HISTORICO}` e fecha o rodízio do mês.
 5. Trocas ao longo do mês: registre em **Trocas** e clique em **Aplicar trocas**.
+
+##### Escala manual do {FUNCAO_ESCALA_MANUAL}
+Na tela de geração, cada domingo tem um campo de {FUNCAO_ESCALA_MANUAL}. Deixe
+vazio para o rodízio decidir, ou escolha as pessoas: elas são reservadas antes
+de tudo, não entram em outra função naquele culto, e contam normalmente no
+rodízio dos meses seguintes.
+
+##### Campos de `{ABA_CONFIG}`
+A tela de geração escreve estes campos por você. Editar direto na planilha
+continua funcionando — é o mesmo formato.
+
+| Campo | Exemplo | Observação |
+|---|---|---|
+| `Mês/Ano` | `Março/2026` ou `03/2026` | competência da escala |
+| `Data da Ceia` | `1º domingo` ou `01/03; 15/03` | em branco = 1º domingo; `nenhuma` = sem Ceia |
+| `Data do culto de oração` | `3ª quarta` ou `18/03` | aceita várias datas separadas por `;` |
+| `Data do <função>` | `2º domingo` | uma linha para cada função de data fixa |
+| `Datas sem culto` | `29/03` | pula essas datas |
+| `Funções cobertas por coringa` | `Abertura; Oferta` | **fora da tela** — padrão se ausente |
+| `Preencher até a quantidade máxima` | `Sim` | **fora da tela** — `Não` preenche só o mínimo |
+| `Evento` | `27/03 \\| Vigília \\| Oração \\| Recepção; Maná Coffee` | `data \\| nome \\| base \\| cargos` |
+| `Escalação manual` | `01/03 \\| Louvor \\| Ana; Bruno` | `data \\| função \\| nomes` |
+
+Datas aceitam `01/03/2026`, `01/03`, só o dia (`1`) e expressões como
+`1º domingo`, `última quarta`.
 """
     )
 
@@ -772,7 +1050,9 @@ def principal() -> None:
         st.stop()
         return
 
-    mes, ano = barra_lateral(base)
+    inicializar_mes(base)
+    barra_lateral(base)
+    mes, ano = mes_selecionado()
 
     st.title("Escala de Voluntários")
 
@@ -782,7 +1062,7 @@ def principal() -> None:
     with abas[0]:
         aba_painel(base, mes, ano)
     with abas[1]:
-        aba_gerar(base, mes, ano)
+        aba_gerar(base)
     with abas[2]:
         aba_whatsapp(base, mes, ano)
     with abas[3]:

@@ -12,7 +12,7 @@ def linha(dia, funcao, nome, culto="Domingo"):
     return Atribuicao(data=date(2026, 3, dia), culto=culto, funcao=funcao, nome=nome)
 
 
-def test_estrutura_do_texto_segue_o_modelo_do_prd():
+def test_estrutura_do_texto_com_bullets_e_mencoes():
     atribuicoes = [
         linha(1, "Staff", "Fulano"),
         linha(1, "Abertura", "Fulana"),
@@ -22,22 +22,39 @@ def test_estrutura_do_texto_segue_o_modelo_do_prd():
         linha(18, "Intercessão", "Beltrano", culto="Oração"),
     ]
     texto = gerar_texto_whatsapp(
-        atribuicoes, mes=3, ano=2026, ordem_funcoes=ORDEM, data_ceia=date(2026, 3, 1)
+        atribuicoes,
+        mes=3,
+        ano=2026,
+        ordem_funcoes=ORDEM,
+        datas_ceia=[date(2026, 3, 1)],
     )
     assert texto == "\n".join(
         [
             "*Escala — Março/2026*",
             "",
             "*Domingo, 01/03 (Ceia)*",
-            "Staff: Fulano",
-            "Abertura: Fulana",
-            "Servo da Ceia: Fulano",
+            "",
+            "* Staff: Fulano (@ )",
+            "* Abertura: Fulana (@ )",
+            "* Servo da Ceia: Fulano (@ )",
             "",
             "*Culto de Oração — Quarta, 18/03*",
-            "Staff: Fulano",
-            "Intercessão: Fulana, Beltrano",
+            "",
+            "* Staff: Fulano (@ )",
+            "* Intercessão: Fulana (@ ) — Beltrano (@ )",
         ]
     )
+
+
+def test_mencoes_podem_ser_desligadas():
+    texto = gerar_texto_whatsapp(
+        [linha(1, "Intercessão", "Ana"), linha(1, "Intercessão", "Bruno")],
+        mes=3,
+        ano=2026,
+        mencoes=False,
+    )
+    assert "* Intercessão: Ana — Bruno" in texto
+    assert "(@" not in texto
 
 
 def test_marca_ceia_pela_presenca_da_funcao_mesmo_sem_a_data():
@@ -47,9 +64,18 @@ def test_marca_ceia_pela_presenca_da_funcao_mesmo_sem_a_data():
     assert "*Domingo, 01/03 (Ceia)*" in texto
 
 
+def test_varias_ceias_no_mesmo_mes():
+    atribuicoes = [linha(1, "Staff", "Ana"), linha(15, "Staff", "Bruno")]
+    texto = gerar_texto_whatsapp(
+        atribuicoes, mes=3, ano=2026, datas_ceia=[date(2026, 3, 1), date(2026, 3, 15)]
+    )
+    assert "*Domingo, 01/03 (Ceia)*" in texto
+    assert "*Domingo, 15/03 (Ceia)*" in texto
+
+
 def test_domingo_comum_nao_recebe_marca_de_ceia():
     texto = gerar_texto_whatsapp(
-        [linha(8, "Staff", "Ana")], mes=3, ano=2026, data_ceia=date(2026, 3, 1)
+        [linha(8, "Staff", "Ana")], mes=3, ano=2026, datas_ceia=[date(2026, 3, 1)]
     )
     assert "*Domingo, 08/03*" in texto
     assert "Ceia" not in texto
@@ -69,20 +95,28 @@ def test_respeita_a_ordem_das_funcoes_do_catalogo():
         linha(1, "Staff", "Ana"),
         linha(1, "Abertura", "Bruno"),
     ]
-    texto = gerar_texto_whatsapp(atribuicoes, mes=3, ano=2026, ordem_funcoes=ORDEM)
-    assert texto.splitlines()[3:] == ["Staff: Ana", "Abertura: Bruno", "Louvor: Carla"]
+    texto = gerar_texto_whatsapp(
+        atribuicoes, mes=3, ano=2026, ordem_funcoes=ORDEM, mencoes=False
+    )
+    assert texto.splitlines()[4:] == [
+        "* Staff: Ana",
+        "* Abertura: Bruno",
+        "* Louvor: Carla",
+    ]
 
 
 def test_funcao_fora_do_catalogo_vai_para_o_fim():
     atribuicoes = [linha(1, "Sonorização", "Carla"), linha(1, "Staff", "Ana")]
-    texto = gerar_texto_whatsapp(atribuicoes, mes=3, ano=2026, ordem_funcoes=ORDEM)
-    assert texto.splitlines()[-2:] == ["Staff: Ana", "Sonorização: Carla"]
+    texto = gerar_texto_whatsapp(
+        atribuicoes, mes=3, ano=2026, ordem_funcoes=ORDEM, mencoes=False
+    )
+    assert texto.splitlines()[-2:] == ["* Staff: Ana", "* Sonorização: Carla"]
 
 
-def test_agrupa_varios_nomes_da_mesma_funcao():
+def test_agrupa_varios_nomes_com_travessao():
     atribuicoes = [linha(1, "Louvor", n) for n in ("Ana", "Bruno", "Carla")]
     texto = gerar_texto_whatsapp(atribuicoes, mes=3, ano=2026, ordem_funcoes=ORDEM)
-    assert "Louvor: Ana, Bruno, Carla" in texto
+    assert "* Louvor: Ana (@ ) — Bruno (@ ) — Carla (@ )" in texto
 
 
 def test_cultos_saem_em_ordem_cronologica():

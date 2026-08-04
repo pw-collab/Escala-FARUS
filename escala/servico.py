@@ -11,14 +11,17 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .dados import (
+    ABA_CONFIG,
     ABA_ESCALA,
     ABA_HISTORICO,
     ABA_TROCAS,
     ABAS_OBRIGATORIAS,
     CABECALHOS_PADRAO,
     BaseDados,
+    ConfiguracoesMes,
     aba_para_atribuicoes,
     aba_para_trocas,
+    atualizar_aba_config,
     carregar_base,
 )
 from .modelos import Atribuicao, Troca
@@ -71,6 +74,14 @@ def salvar_trocas(
     aba = aba_para_trocas(
         _titulo_real(base, ABA_TROCAS), _cabecalho_de(base, ABA_TROCAS), registros
     )
+    repositorio.salvar_aba(aba)
+
+
+def salvar_configuracoes(
+    repositorio: Repositorio, base: BaseDados, config: ConfiguracoesMes
+) -> None:
+    """Persiste na planilha a configuração montada na tela de geração."""
+    aba = atualizar_aba_config(base.planilha.obter(ABA_CONFIG), config, base.funcoes)
     repositorio.salvar_aba(aba)
 
 

@@ -17,6 +17,7 @@ from .modelos import (
     FUNCAO_CEIA,
     TROCA_PENDENTE,
     Atribuicao,
+    EscalaManual,
     Evento,
     Funcao,
     Indisponibilidade,
@@ -25,6 +26,7 @@ from .modelos import (
 )
 from .planilha import Aba, MapaColunas, Planilha
 from .textos import (
+    competencia,
     domingos_do_mes,
     formatar_data_iso,
     limpar,
@@ -169,6 +171,15 @@ CHAVE_PREENCHER_MAXIMO = (
 )
 CHAVE_SEM_CULTO = ("datas sem culto", "domingos sem culto", "datas canceladas")
 PREFIXO_EVENTO = "evento"
+PREFIXO_MANUAL = "escalacao manual"
+
+# Rótulos usados ao gravar de volta na planilha.
+CAMPO_MES_ANO = "Mês/Ano"
+CAMPO_CEIA = "Data da Ceia"
+CAMPO_ORACAO = "Data do culto de oração"
+CAMPO_SEM_CULTO = "Datas sem culto"
+CAMPO_EVENTO = "Evento"
+CAMPO_MANUAL = "Escalação manual"
 
 
 @dataclass
@@ -177,10 +188,11 @@ class ConfiguracoesMes:
 
     mes: int | None = None
     ano: int | None = None
-    data_ceia: date | None = None
+    datas_ceia: list[date] = field(default_factory=list)
     datas_oracao: list[date] = field(default_factory=list)
     datas_por_funcao: dict[str, list[date]] = field(default_factory=dict)
     eventos: list[Evento] = field(default_factory=list)
+    manuais: list[EscalaManual] = field(default_factory=list)
     alvos_coringa: list[str] = field(default_factory=lambda: list(ALVOS_CORINGA_PADRAO))
     preencher_maximo: bool = True
     datas_sem_culto: list[date] = field(default_factory=list)
@@ -190,9 +202,29 @@ class ConfiguracoesMes:
     def datas_da_funcao(self, funcao: str) -> list[date]:
         return self.datas_por_funcao.get(normalizar(funcao), [])
 
+    def data_da_funcao(self, funcao: str) -> date | None:
+        """Primeira (normalmente única) data de uma função de data fixa."""
+        datas = self.datas_da_funcao(funcao)
+        return datas[0] if datas else None
+
+    def e_ceia(self, dia: date) -> bool:
+        return dia in self.datas_ceia
+
     def aceita_coringa(self, funcao: str) -> bool:
         alvo = normalizar(funcao)
         return any(normalizar(a) == alvo for a in self.alvos_coringa)
+
+    def manuais_de(self, dia: date) -> dict[str, list[str]]:
+        """Escalações fixadas à mão naquele dia: {chave da função: nomes}."""
+        resultado: dict[str, list[str]] = {}
+        for manual in self.manuais:
+            if manual.data != dia or not manual.nomes:
+                continue
+            resultado.setdefault(normalizar(manual.funcao), []).extend(manual.nomes)
+        return resultado
+
+    def nomes_manuais(self, dia: date, funcao: str) -> list[str]:
+        return self.manuais_de(dia).get(normalizar(funcao), [])
 
 
 @dataclass
@@ -219,6 +251,21 @@ class BaseDados:
             if funcao.chave == alvo:
                 return funcao
         return None
+
+    def voluntario_por_nome(self, nome: str) -> Voluntario | None:
+        alvo = normalizar(nome)
+        for voluntario in self.voluntarios:
+            if voluntario.chave == alvo:
+                return voluntario
+        return None
+
+    def funcoes_de_data_fixa(self) -> list[Funcao]:
+        """Funções que só acontecem em datas marcadas (fora a da Ceia)."""
+        return [
+            f
+            for f in sorted(self.funcoes, key=lambda f: f.ordem)
+            if f.data_fixa and f.chave != normalizar(FUNCAO_CEIA)
+        ]
 
     def ordem_das_funcoes(self) -> list[str]:
         """Ordem canônica de exibição das funções (a da aba `Funções`)."""
@@ -459,12 +506,10 @@ def ler_configuracoes(
 
         if _casa_chave(campo, CHAVE_CEIA):
             if normalizar(valor) in {"nenhuma", "nenhum", "sem ceia", "nao"}:
-                config.data_ceia = None
+                config.datas_ceia = []
             else:
-                lida = parse_data(valor, ano=ano, mes=mes)
-                if lida:
-                    config.data_ceia = lida
-                elif not vazio(valor):
+                config.datas_ceia = parse_datas(valor, ano=ano, mes=mes)
+                if not config.datas_ceia and not vazio(valor):
                     config.avisos.append(f"Não entendi a data da Ceia: `{valor}`.")
             continue
 
@@ -488,6 +533,12 @@ def ler_configuracoes(
             config.datas_sem_culto = parse_datas(valor, ano=ano, mes=mes)
             continue
 
+        if normalizar(campo).startswith(PREFIXO_MANUAL):
+            manual = _ler_manual(campo, valor, ano, mes, config.avisos)
+            if manual:
+                config.manuais.append(manual)
+            continue
+
         if normalizar(campo).startswith(PREFIXO_EVENTO):
             evento = _ler_evento(campo, valor, ano, mes, config.avisos)
             if evento:
@@ -504,18 +555,20 @@ def ler_configuracoes(
                 config.avisos.append(f"Não entendi a data de `{campo}`: `{valor}`.")
 
     # A Ceia tem padrão: 1º domingo do mês.
-    if config.data_ceia is None and not _tem_chave(pares, CHAVE_CEIA) and ano and mes:
+    if not config.datas_ceia and not _tem_chave(pares, CHAVE_CEIA) and ano and mes:
         domingos = domingos_do_mes(ano, mes)
         if domingos:
-            config.data_ceia = domingos[0]
+            config.datas_ceia = [domingos[0]]
             config.avisos.append(
                 "Sem `Data da Ceia` nas configurações: assumindo o 1º domingo "
-                f"({config.data_ceia.strftime('%d/%m')})."
+                f"({domingos[0].strftime('%d/%m')})."
             )
 
-    # A função da Ceia herda a data da Ceia.
-    if config.data_ceia:
-        config.datas_por_funcao.setdefault(normalizar(FUNCAO_CEIA), []).append(config.data_ceia)
+    # A função da Ceia herda as datas da Ceia.
+    if config.datas_ceia:
+        config.datas_por_funcao.setdefault(normalizar(FUNCAO_CEIA), []).extend(
+            config.datas_ceia
+        )
 
     for chave, datas in config.datas_por_funcao.items():
         config.datas_por_funcao[chave] = sorted(set(datas))
@@ -588,6 +641,30 @@ def _ler_evento(
 
     extras = parse_lista(partes[3]) if len(partes) > 3 else []
     return Evento(data=data, nome=nome, base=base, funcoes_extras=extras)
+
+
+def _ler_manual(
+    campo: str, valor: str, ano: int | None, mes: int | None, avisos: list[str]
+) -> EscalaManual | None:
+    """Lê ``Escalação manual`` = ``data | função | nome1; nome2``."""
+    partes = [limpar(p) for p in str(valor).split("|")]
+    if len(partes) < 3:
+        if not vazio(valor):
+            avisos.append(
+                f"`{campo}` ignorada: use o formato `data | função | nomes` "
+                f"(recebi `{valor}`)."
+            )
+        return None
+
+    data = parse_data(partes[0], ano=ano, mes=mes)
+    if data is None:
+        avisos.append(f"`{campo}` ignorada: data ilegível em `{valor}`.")
+        return None
+
+    nomes = parse_lista(partes[2])
+    if not partes[1] or not nomes:
+        return None
+    return EscalaManual(data=data, funcao=partes[1], nomes=nomes)
 
 
 def carregar_base(planilha: Planilha) -> BaseDados:
@@ -685,6 +762,98 @@ def aba_para_atribuicoes(
         )
         for registro in registros
     ]
+    return Aba(titulo=titulo, cabecalho=colunas, linhas=linhas)
+
+
+def _datas_para_texto(datas: list[date]) -> str:
+    return "; ".join(formatar_data_iso(d) for d in sorted(datas))
+
+
+def atualizar_aba_config(
+    aba: Aba | None, config: ConfiguracoesMes, funcoes: list[Funcao]
+) -> Aba:
+    """Grava a configuração da tela de volta na aba `Configurações do Mês`.
+
+    Só as linhas que a tela controla são reescritas. Qualquer outra linha —
+    inclusive `Funções cobertas por coringa` e `Preencher até a quantidade
+    máxima`, que ficam fora da tela — é preservada exatamente como está, na
+    mesma posição.
+    """
+    titulo = aba.titulo if aba else ABA_CONFIG
+    colunas = list(aba.cabecalho) if aba and aba.cabecalho else list(CABECALHOS_PADRAO[ABA_CONFIG])
+    mapa = MapaColunas(colunas, COLUNAS_CONFIG)
+
+    # Linhas atuais, já sem as chaves repetidas que serão regeradas no fim.
+    atuais: list[tuple[str, list[str]]] = []
+    for linha in (aba.linhas_uteis() if aba else []):
+        campo = mapa.ler(linha, "campo") if mapa.tem("campo") else (linha[0] if linha else "")
+        chave = normalizar(campo)
+        if chave.startswith(PREFIXO_EVENTO) or chave.startswith(PREFIXO_MANUAL):
+            continue
+        atuais.append((campo, list(linha)))
+
+    # (como reconhecer a linha existente, rótulo se precisar criar, novo valor)
+    edicoes: list[tuple[object, str, str]] = [
+        (
+            lambda c: _casa_chave(c, CHAVE_MES_ANO),
+            CAMPO_MES_ANO,
+            competencia(config.mes, config.ano) if config.mes and config.ano else "",
+        ),
+        (
+            lambda c: _casa_chave(c, CHAVE_CEIA),
+            CAMPO_CEIA,
+            _datas_para_texto(config.datas_ceia) if config.datas_ceia else "nenhuma",
+        ),
+        (
+            lambda c: _casa_chave(c, CHAVE_ORACAO),
+            CAMPO_ORACAO,
+            _datas_para_texto(config.datas_oracao),
+        ),
+        (
+            lambda c: _casa_chave(c, CHAVE_SEM_CULTO),
+            CAMPO_SEM_CULTO,
+            _datas_para_texto(config.datas_sem_culto),
+        ),
+    ]
+
+    for funcao in funcoes:
+        if not funcao.data_fixa or funcao.chave == normalizar(FUNCAO_CEIA):
+            continue
+        edicoes.append(
+            (
+                (lambda alvo: lambda c: _funcao_de_data_fixa(c, funcoes) == alvo)(funcao.chave),
+                f"Data do {funcao.nome}",
+                _datas_para_texto(config.datas_da_funcao(funcao.nome)),
+            )
+        )
+
+    for reconhece, rotulo, valor in edicoes:
+        for indice, (campo, linha) in enumerate(atuais):
+            if reconhece(campo):
+                atuais[indice] = (campo, mapa.escrever(linha, "valor", valor))
+                break
+        else:
+            atuais.append((rotulo, mapa.montar({"campo": rotulo, "valor": valor})))
+
+    linhas = [linha for _, linha in atuais]
+
+    for evento in config.eventos:
+        extras = "; ".join(evento.funcoes_extras)
+        base_evento = evento.base or "Nenhum"
+        valor = f"{formatar_data_iso(evento.data)} | {evento.nome} | {base_evento}"
+        if extras:
+            valor += f" | {extras}"
+        linhas.append(mapa.montar({"campo": CAMPO_EVENTO, "valor": valor}))
+
+    for manual in config.manuais:
+        if not manual.nomes:
+            continue
+        valor = (
+            f"{formatar_data_iso(manual.data)} | {manual.funcao} | "
+            f"{'; '.join(manual.nomes)}"
+        )
+        linhas.append(mapa.montar({"campo": CAMPO_MANUAL, "valor": valor}))
+
     return Aba(titulo=titulo, cabecalho=colunas, linhas=linhas)
 
 

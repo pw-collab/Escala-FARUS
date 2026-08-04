@@ -34,7 +34,7 @@ def montar_cultos(config: ConfiguracoesMes, mes: int, ano: int) -> list[Culto]:
                 tipo=CULTO_DOMINGO,
                 rotulo=CULTO_DOMINGO,
                 base=CULTO_DOMINGO,
-                ceia=(config.data_ceia == domingo),
+                ceia=config.e_ceia(domingo),
             )
         )
 

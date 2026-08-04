@@ -423,6 +423,142 @@ def test_estado_rodizio_guarda_a_data_mais_recente():
     assert estado.vezes("ana", "staff") == 3
 
 
+# ---------------------------------------------------------------------------
+# Escalação manual (feita na tela de geração)
+# ---------------------------------------------------------------------------
+
+MANUAL = "Escalação manual"
+
+
+def _base_manual(linhas_manuais, voluntarios=None, funcoes=None):
+    return montar(
+        voluntarios=voluntarios
+        or [
+            ["Ana", "", "Sim", "Louvor", ""],
+            ["Bruno", "", "Sim", "Louvor", ""],
+            ["Carla", "", "Sim", "Louvor", ""],
+            ["Diego", "", "Sim", "Louvor; Staff", ""],
+        ],
+        funcoes=funcoes
+        or [
+            ["Staff", "Domingo", "1", "1", "Não", "Não"],
+            ["Louvor", "Domingo", "1", "2", "Não", "Não"],
+        ],
+        config=CONFIG_SIMPLES + [[MANUAL, linha] for linha in linhas_manuais],
+    )
+
+
+def test_escalacao_manual_e_respeitada():
+    base = _base_manual(["01/03 | Louvor | Carla; Diego"])
+    resultado = gerar_escala(base, 3, 2026)
+    assert sorted(nomes_em(resultado, 1, "Louvor")) == ["Carla", "Diego"]
+
+
+def test_escalacao_manual_reserva_a_pessoa_antes_das_outras_funcoes():
+    """Diego é o único apto a Staff, mas foi fixado no Louvor: Staff fica aberta."""
+    base = _base_manual(["01/03 | Louvor | Diego"])
+    resultado = gerar_escala(base, 3, 2026)
+    assert "Diego" in nomes_em(resultado, 1, "Louvor")
+    assert nomes_em(resultado, 1, "Staff") == []
+    assert any(p.funcao == "Staff" and p.data.day == 1 for p in resultado.pendencias)
+
+
+def test_escalacao_manual_completa_as_vagas_restantes_automaticamente():
+    base = _base_manual(["01/03 | Louvor | Carla"])
+    resultado = gerar_escala(base, 3, 2026)
+    escalados = nomes_em(resultado, 1, "Louvor")
+    assert "Carla" in escalados
+    assert len(escalados) == 2  # a segunda vaga foi preenchida pelo rodízio
+
+
+def test_escalacao_manual_pode_passar_da_quantidade_maxima():
+    """A escolha do admin vale mesmo acima do máximo da função."""
+    base = _base_manual(["01/03 | Louvor | Ana; Bruno; Carla"])
+    resultado = gerar_escala(base, 3, 2026)
+    assert sorted(nomes_em(resultado, 1, "Louvor")) == ["Ana", "Bruno", "Carla"]
+
+
+def test_escalacao_manual_vale_so_no_dia_indicado():
+    base = _base_manual(["01/03 | Louvor | Carla; Diego"])
+    resultado = gerar_escala(base, 3, 2026)
+    assert sorted(nomes_em(resultado, 1, "Louvor")) == ["Carla", "Diego"]
+    assert nomes_em(resultado, 8, "Louvor") != ["Carla", "Diego"]
+
+
+def test_escalacao_manual_conta_no_rodizio_dos_proximos_cultos():
+    base = _base_manual(
+        ["01/03 | Louvor | Ana; Bruno"],
+        voluntarios=[
+            ["Ana", "", "Sim", "Louvor", ""],
+            ["Bruno", "", "Sim", "Louvor", ""],
+            ["Carla", "", "Sim", "Louvor", ""],
+            ["Diego", "", "Sim", "Louvor", ""],
+        ],
+        funcoes=[["Louvor", "Domingo", "2", "2", "Não", "Não"]],
+    )
+    resultado = gerar_escala(base, 3, 2026)
+    # Quem serviu no dia 1 por escolha manual cede a vez no domingo seguinte.
+    assert set(nomes_em(resultado, 8, "Louvor")) == {"Carla", "Diego"}
+
+
+def test_escalacao_manual_com_nome_desconhecido_avisa():
+    base = _base_manual(["01/03 | Louvor | Zezinho"])
+    resultado = gerar_escala(base, 3, 2026)
+    assert any("Zezinho" in a for a in resultado.avisos)
+
+
+def test_escalacao_manual_avisa_quando_a_pessoa_esta_indisponivel():
+    base = montar(
+        voluntarios=[["Ana", "", "Sim", "Louvor", ""], ["Bruno", "", "Sim", "Louvor", ""]],
+        funcoes=[["Louvor", "Domingo", "1", "1", "Não", "Não"]],
+        config=CONFIG_SIMPLES + [[MANUAL, "01/03 | Louvor | Ana"]],
+        indisp=[["Ana", "01/03/2026", "01/03/2026", "viagem"]],
+    )
+    resultado = gerar_escala(base, 3, 2026)
+    assert nomes_em(resultado, 1, "Louvor") == ["Ana"]  # a decisão do admin prevalece
+    assert any("indisponível" in a for a in resultado.avisos)
+
+
+def test_escalacao_manual_de_funcao_ausente_no_culto_avisa():
+    """Louvor é função de domingo; fixar alguém nela no culto de oração avisa."""
+    base = montar(
+        voluntarios=[["Ana", "", "Sim", "Louvor; Staff", ""]],
+        funcoes=[
+            ["Staff", "Ambos", "1", "1", "Não", "Não"],
+            ["Louvor", "Domingo", "1", "1", "Não", "Não"],
+        ],
+        config=[
+            ["Mês/Ano", "03/2026"],
+            ["Data da Ceia", "nenhuma"],
+            ["Data do culto de oração", "18/03"],
+            [MANUAL, "18/03 | Louvor | Ana"],
+        ],
+    )
+    resultado = gerar_escala(base, 3, 2026)
+    assert any("não faz parte desse culto" in a for a in resultado.avisos)
+
+
+def test_escalacao_manual_em_data_sem_culto_avisa():
+    base = _base_manual(["12/03 | Louvor | Ana"])  # 12/03/2026 é uma quinta-feira
+    resultado = gerar_escala(base, 3, 2026)
+    assert any("não há culto nessa data" in a for a in resultado.avisos)
+
+
+# ---------------------------------------------------------------------------
+# Ceia em mais de um domingo
+# ---------------------------------------------------------------------------
+
+def test_ceia_pode_acontecer_em_mais_de_um_domingo():
+    base = montar(
+        voluntarios=[["Ana", "", "Sim", "Servo da Ceia", ""],
+                     ["Bruno", "", "Sim", "Servo da Ceia", ""]],
+        funcoes=[["Servo da Ceia", "Domingo", "1", "1", "Não", "Sim"]],
+        config=[["Mês/Ano", "03/2026"], ["Data da Ceia", "01/03; 15/03"]],
+    )
+    resultado = gerar_escala(base, 3, 2026)
+    assert {a.data.day for a in resultado.atribuicoes} == {1, 15}
+
+
 def test_demo_gera_mes_completo_sem_pendencias(demo):
     resultado = gerar_escala(demo, 3, 2026)
     assert resultado.pendencias == []

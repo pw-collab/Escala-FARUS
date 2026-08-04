@@ -23,6 +23,11 @@ FUNCAO_CEIA = "Servo da Ceia"
 # Funções que, por padrão, podem ser cobertas por quem já está em função coringa.
 ALVOS_CORINGA_PADRAO = ("Abertura", "Oferta")
 
+# Função oferecida para escalação manual na tela de geração (o time de louvor
+# costuma ser definido pelo ministro, não sorteado). Se ela não existir no
+# catálogo, o campo simplesmente não aparece.
+FUNCAO_ESCALA_MANUAL = "Louvor"
+
 # Marca usada quando o voluntário pode exercer qualquer função.
 CURINGA_TODAS = {"todas", "todos", "qualquer", "*", "tudo"}
 
@@ -147,6 +152,20 @@ class Evento:
     nome: str
     base: str = CULTO_DOMINGO  # "Domingo", "Oração" ou "" (só funções próprias)
     funcoes_extras: list[str] = field(default_factory=list)
+
+
+@dataclass
+class EscalaManual:
+    """Pessoas fixadas à mão numa função de um culto específico.
+
+    O motor respeita essas escolhas: as pessoas são reservadas antes de
+    qualquer distribuição automática, não são escaladas em outra função no
+    mesmo culto, e contam normalmente no rodízio dos meses seguintes.
+    """
+
+    data: date
+    funcao: str
+    nomes: list[str] = field(default_factory=list)
 
 
 @dataclass
