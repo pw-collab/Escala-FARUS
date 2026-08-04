@@ -13,9 +13,10 @@ from escala.dados import (
     ABA_VOLUNTARIOS,
     ABA_CONFIG,
     ABA_FUNCOES,
+    ConfiguracoesMes,
 )
 from escala.demo import planilha_demo
-from escala.modelos import TROCA_APLICADA, TROCA_PENDENTE, Troca
+from escala.modelos import TROCA_APLICADA, TROCA_PENDENTE, EscalaManual, Troca
 from escala.motor import gerar_escala
 from escala.planilha import Aba
 from escala.repositorio import RepositorioMemoria
@@ -182,6 +183,39 @@ def test_abas_faltantes_sao_detectadas_e_criadas():
     # As abas de catálogo vêm com exemplos; as de dados vêm vazias.
     assert base.funcoes
     assert base.historico == []
+
+
+def test_salvar_configuracoes_da_tela_e_gerar_com_elas(repo):
+    """Fluxo da tela de geração: configurar, persistir e gerar já com os valores."""
+    base = servico.carregar(repo)
+    manual = ["Camila Freitas", "Gabriela Nunes"]
+
+    config = ConfiguracoesMes(
+        mes=3,
+        ano=2026,
+        datas_ceia=[date(2026, 3, 8)],
+        datas_oracao=[date(2026, 3, 18)],
+        datas_sem_culto=[date(2026, 3, 29)],
+        datas_por_funcao={normalizar("Geração Luz"): [date(2026, 3, 15)]},
+        manuais=[EscalaManual(date(2026, 3, 1), "Louvor", manual)],
+        alvos_coringa=list(base.config.alvos_coringa),
+        preencher_maximo=base.config.preencher_maximo,
+    )
+    servico.salvar_configuracoes(repo, base, config)
+
+    base = servico.carregar(repo)
+    assert base.config.datas_ceia == [date(2026, 3, 8)]
+    assert base.config.nomes_manuais(date(2026, 3, 1), "Louvor") == manual
+    # Campos que a tela não controla continuam valendo.
+    assert base.config.aceita_coringa("Abertura")
+    assert base.config.preencher_maximo is True
+
+    resultado = gerar_escala(base, 3, 2026)
+    dias = {a.data.day for a in resultado.atribuicoes}
+    assert 29 not in dias  # domingo desligado
+    assert {a.nome for a in resultado.atribuicoes if a.data == date(2026, 3, 1)} >= set(manual)
+    assert {a.data.day for a in resultado.atribuicoes if a.funcao == "Servo da Ceia"} == {8}
+    assert {a.data.day for a in resultado.atribuicoes if a.funcao == "Geração Luz"} == {15}
 
 
 def test_nomes_conhecidos_sai_ordenado(repo):

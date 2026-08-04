@@ -25,15 +25,20 @@ dos voluntários são mantidos. O app lê, sugere a escala e grava de volta.
 
 ## Fluxo do mês
 
-1. Conferir a aba `Configurações do Mês` (datas de Ceia, oração, infantil,
-   eventos) — direto na planilha ou pelo painel do app.
-2. **Gerar escala do mês** → revisar e ajustar o rascunho na tabela →
+1. **Gerar escala do mês** → abre a tela de configuração: mês/ano, Ceia e escala
+   manual do Louvor por domingo, domingos sem culto, datas do Geração Luz e do
+   Fusion, culto de oração e eventos.
+2. **Gerar escala** → revisar e ajustar o rascunho na tabela →
    **Salvar na planilha**.
 3. **Texto para o WhatsApp** → copiar → colar no grupo.
 4. **Confirmar publicação** → grava na aba `Histórico`, fechando o ciclo de
    rodízio do mês.
 5. Trocas ao longo do mês: registrar em **Trocas** e clicar em **Aplicar
    trocas** — o app corrige o rascunho ou o histórico, conforme o caso.
+
+A configuração é feita na tela, não na planilha. Ao gerar, o app grava os
+valores de volta na aba `Configurações do Mês`, então planilha e tela nunca
+divergem — e editar direto na planilha continua funcionando.
 
 ## Rodar localmente
 
@@ -107,18 +112,22 @@ para criar, remover ou renomear uma função, basta editar esta aba.
 | Campo | Exemplo | Observação |
 |---|---|---|
 | `Mês/Ano` | `Março/2026` ou `03/2026` | competência da escala |
-| `Data da Ceia` | `1º domingo` ou `01/03` | em branco = 1º domingo; `nenhuma` = sem Ceia |
+| `Data da Ceia` | `1º domingo` ou `01/03; 15/03` | em branco = 1º domingo; `nenhuma` = sem Ceia |
 | `Data do culto de oração` | `3ª quarta` ou `18/03` | aceita várias datas separadas por `;` |
-| `Data do Infantil 10-12` | `2º domingo` | uma linha `Data do …` para cada função de data fixa |
-| `Data do Adolescentes 13-17` | `3º domingo` | |
+| `Data do Geração Luz` | `2º domingo` | uma linha `Data do …` para cada função de data fixa |
+| `Data do Fusion` | `3º domingo` | |
 | `Datas sem culto` | `29/03` | pula essas datas |
-| `Funções cobertas por coringa` | `Abertura; Oferta` | esse é o padrão se a linha não existir |
-| `Preencher até a quantidade máxima` | `Sim` | `Não` preenche só o mínimo |
+| `Funções cobertas por coringa` | `Abertura; Oferta` | **não fica na tela** — padrão se a linha não existir |
+| `Preencher até a quantidade máxima` | `Sim` | **não fica na tela** — `Não` preenche só o mínimo |
 | `Evento` | `27/03 \| Vigília \| Oração \| Recepção; Maná Coffee` | uma linha por evento |
+| `Escalação manual` | `01/03 \| Louvor \| Ana; Bruno` | `data \| função \| nomes` |
 
-Formato do evento: `data | nome | base | funções extras`. A `base` (`Domingo`,
-`Oração` ou `Nenhum`) define de qual culto o evento herda as funções; as funções
-extras são somadas a elas.
+Formato do evento: `data | nome | base | cargos`. A `base` (`Domingo`,
+`Oração` ou `Nenhum`) define de qual culto o evento herda as funções; os cargos
+são somados a elas.
+
+As duas últimas linhas são escritas pela tela de geração — a de eventos pela
+tabela editável, a de escalação manual pelo campo de Louvor de cada domingo.
 
 Datas aceitam `01/03/2026`, `01/03`, só o dia (`1`) e expressões como
 `1º domingo`, `última quarta`, `3ª sexta`.
@@ -163,8 +172,13 @@ aba `Funções`:
 4. Se uma função coberta por coringa (`Abertura`/`Oferta`) ficar sem gente, usa
    alguém já escalado em função **coringa** naquele mesmo culto, priorizando quem
    ainda não acumulou função extra no dia.
-5. Acrescenta `Servo da Ceia` no domingo da Ceia e as funções de data fixa nas
+5. Acrescenta `Servo da Ceia` nos domingos de Ceia e as funções de data fixa nas
    datas marcadas.
+
+Quem foi **escalado à mão** na tela de geração (o campo de Louvor de cada
+domingo) é reservado antes de tudo: não entra em outra função naquele culto, a
+escolha vale mesmo acima da quantidade máxima, e as vagas restantes da função
+são completadas pelo rodízio. Essas escalas contam normalmente no histórico.
 
 **Não existe limite rígido de escalas por pessoa.** Em vez disso, cada escolha
 realimenta o rodízio na hora — por isso a mesma pessoa não se repete em cultos
@@ -198,7 +212,7 @@ escala/
   sheets.py            implementação sobre o Google Sheets
   demo.py              planilha de demonstração
   servico.py           fachada usada pela interface
-tests/                 149 testes, sem rede e sem credenciais
+tests/                 170 testes, sem rede e sem credenciais
 ```
 
 A lógica de negócio não depende de Streamlit nem de rede: dá para testar tudo
@@ -213,3 +227,21 @@ localmente e trocar a origem dos dados no futuro sem mexer no motor.
 - Autoatendimento de troca pelo voluntário.
 - Coleta prévia formal de disponibilidade.
 - Login individual por pessoa (esta versão usa senha compartilhada).
+
+---
+
+## Texto gerado
+
+```
+*Escala — Setembro/2026*
+
+*Domingo, 06/09 (Ceia)*
+
+* Intercessão: Antonio (@ ) — Maria (@ )
+* Louvor: Pedro (@ ) — Ana (@ )
+```
+
+Cada função vira um item de lista; os nomes são separados por travessão. O
+`(@ )` fica pronto para você tocar dentro do parêntese no WhatsApp e escolher a
+pessoa — a menção é feita na hora do envio, sem precisar cadastrar telefone
+nenhum. Dá para desligar as menções na aba **WhatsApp**.

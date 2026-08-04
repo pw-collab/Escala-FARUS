@@ -49,14 +49,26 @@ def _ordem_da_funcao(nome: str, ordem_funcoes: list[str]) -> int:
     return len(ordem_funcoes)
 
 
+def formatar_nomes(nomes: list[str], mencoes: bool = True) -> str:
+    """Nomes de uma função, separados por travessão.
+
+    Com `mencoes`, cada nome ganha um `(@ )` logo depois: no WhatsApp, basta
+    clicar dentro do parêntese e escolher a pessoa na lista que aparece — a
+    menção é feita na hora do envio, sem precisar dos números de telefone.
+    """
+    sufixo = " (@ )" if mencoes else ""
+    return " — ".join(f"{nome}{sufixo}" for nome in nomes)
+
+
 def gerar_texto_whatsapp(
     atribuicoes: list[Atribuicao],
     mes: int | None = None,
     ano: int | None = None,
     ordem_funcoes: list[str] | None = None,
-    data_ceia: date | None = None,
+    datas_ceia: list[date] | None = None,
     titulo: str | None = None,
     rodape: str = "",
+    mencoes: bool = True,
 ) -> str:
     """Monta a mensagem completa da escala do mês.
 
@@ -64,6 +76,7 @@ def gerar_texto_whatsapp(
     catálogo (extras de evento) vão para o fim, em ordem de aparição.
     """
     ordem_funcoes = ordem_funcoes or []
+    ceias = set(datas_ceia or [])
     validas = [a for a in atribuicoes if a.data and a.nome]
     if not validas:
         return ""
@@ -94,19 +107,17 @@ def gerar_texto_whatsapp(
         funcoes = grupos[chave_culto]
         aparicao = ordem_aparicao[chave_culto]
 
-        e_ceia = (data_ceia is not None and data == data_ceia) or any(
-            "ceia" in normalizar(f) for f in funcoes
-        )
+        e_ceia = data in ceias or any("ceia" in normalizar(f) for f in funcoes)
 
         linhas.append("")
         linhas.append(_titulo_do_culto(data, rotulo, e_ceia))
+        linhas.append("")
 
         def posicao(funcao: str) -> tuple[int, int]:
             return (_ordem_da_funcao(funcao, ordem_funcoes), aparicao.index(funcao))
 
         for funcao in sorted(funcoes, key=posicao):
-            nomes = ", ".join(funcoes[funcao])
-            linhas.append(f"{funcao}: {nomes}")
+            linhas.append(f"* {funcao}: {formatar_nomes(funcoes[funcao], mencoes)}")
 
     if rodape:
         linhas.append("")
@@ -119,7 +130,8 @@ def gerar_texto_de_um_culto(
     atribuicoes: list[Atribuicao],
     data: date,
     ordem_funcoes: list[str] | None = None,
-    data_ceia: date | None = None,
+    datas_ceia: list[date] | None = None,
+    mencoes: bool = True,
 ) -> str:
     """Versão curta: só um culto, útil para lembrete de véspera."""
     do_dia = [a for a in atribuicoes if a.data == data]
@@ -128,6 +140,7 @@ def gerar_texto_de_um_culto(
     return gerar_texto_whatsapp(
         do_dia,
         ordem_funcoes=ordem_funcoes,
-        data_ceia=data_ceia,
+        datas_ceia=datas_ceia,
         titulo="",
+        mencoes=mencoes,
     ).lstrip("\n")

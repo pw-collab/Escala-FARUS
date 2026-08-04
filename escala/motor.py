@@ -174,6 +174,15 @@ def gerar_escala(
         resultado.avisos.append("Nenhum voluntário ativo cadastrado.")
         return resultado
 
+    # Escalação manual sobrando de uma data que deixou de ter culto.
+    datas_com_culto = {c.data for c in cultos}
+    for manual in base.config.manuais:
+        if manual.nomes and manual.data not in datas_com_culto:
+            resultado.avisos.append(
+                f"{formatar_data(manual.data)}: escalação manual de "
+                f"`{manual.funcao}` ignorada — não há culto nessa data."
+            )
+
     # O rodízio parte do histórico já publicado, ignorando registros do próprio
     # mês que está sendo gerado (evita contar duas vezes ao regerar).
     historico_anterior = [
@@ -186,7 +195,9 @@ def gerar_escala(
 
     for culto in cultos:
         resultado.atribuicoes.extend(
-            _gerar_culto(culto, base, estado, semente, resultado.pendencias)
+            _gerar_culto(
+                culto, base, estado, semente, resultado.pendencias, resultado.avisos
+            )
         )
 
     if not resultado.atribuicoes:
@@ -197,20 +208,58 @@ def gerar_escala(
     return resultado
 
 
+def _fixos_do_culto(
+    culto: Culto, funcoes: list[Funcao], base: BaseDados, avisos: list[str]
+) -> dict[str, list[Voluntario]]:
+    """Resolve as escalações manuais daquele dia em voluntários de verdade."""
+    disponiveis = {f.chave for f in funcoes}
+    fixos: dict[str, list[Voluntario]] = {}
+
+    for chave_funcao, nomes in base.config.manuais_de(culto.data).items():
+        if chave_funcao not in disponiveis:
+            avisos.append(
+                f"{formatar_data(culto.data)}: escalação manual ignorada — a função "
+                "indicada não faz parte desse culto."
+            )
+            continue
+        for nome in nomes:
+            voluntario = base.voluntario_por_nome(nome)
+            if voluntario is None:
+                avisos.append(
+                    f"{formatar_data(culto.data)}: `{nome}` foi escalado à mão mas não "
+                    "está na aba `Voluntários`."
+                )
+                continue
+            if esta_indisponivel(voluntario, culto.data, base.indisponibilidades):
+                avisos.append(
+                    f"{formatar_data(culto.data)}: {voluntario.nome} foi escalado à mão "
+                    "mesmo constando como indisponível nessa data."
+                )
+            ja = fixos.setdefault(chave_funcao, [])
+            if voluntario.chave not in {v.chave for v in ja}:
+                ja.append(voluntario)
+    return fixos
+
+
 def _gerar_culto(
     culto: Culto,
     base: BaseDados,
     estado: EstadoRodizio,
     semente: str,
     pendencias: list[Pendencia],
+    avisos: list[str],
 ) -> list[Atribuicao]:
     """Preenche um culto: primeiro as funções normais, depois a cobertura coringa."""
     funcoes = funcoes_do_culto(culto, base.funcoes, base.config)
-    escalados: set[str] = set()
     extras_hoje: dict[str, int] = {}  # quantas funções adicionais cada um acumulou
     coringas_do_culto: list[Voluntario] = []
     atribuicoes: list[Atribuicao] = []
     vagas_abertas: list[tuple[Funcao, int]] = []
+
+    # Quem foi escalado à mão é reservado antes de tudo, para que a distribuição
+    # automática de uma função anterior não "roube" essa pessoa.
+    fixos = _fixos_do_culto(culto, funcoes, base, avisos)
+    escalados: set[str] = {v.chave for lista in fixos.values() for v in lista}
 
     for funcao in funcoes:
         desejado = funcao.qtd_max if base.config.preencher_maximo else funcao.qtd_min
@@ -218,10 +267,17 @@ def _gerar_culto(
         if desejado <= 0:
             continue
 
+        # As escolhas manuais valem como estão, mesmo acima da quantidade máxima.
+        pre_escalados = fixos.get(funcao.chave, [])
+        vagas_restantes = max(desejado - len(pre_escalados), 0)
+
         candidatos = candidatos_para(
             funcao, culto, base.voluntarios, base.indisponibilidades, escalados
         )
-        escolhidos = ordenar_por_rodizio(candidatos, funcao.chave, estado, semente)[:desejado]
+        automaticos = ordenar_por_rodizio(candidatos, funcao.chave, estado, semente)[
+            :vagas_restantes
+        ]
+        escolhidos = pre_escalados + automaticos
 
         for voluntario in escolhidos:
             atribuicoes.append(
