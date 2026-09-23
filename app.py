@@ -24,6 +24,8 @@ from escala.dados import (
     ConfiguracoesMes,
 )
 from escala.demo import repositorio_demo
+from escala.grade import montar_grade
+from escala.imagem import renderizar_png
 from escala.modelos import (
     FUNCAO_CEIA,
     FUNCAO_ESCALA_MANUAL,
@@ -688,27 +690,42 @@ def aba_gerar(base: BaseDados) -> None:
             )
 
 
+@st.cache_data(show_spinner=False, max_entries=16)
+def imagem_da_escala(
+    linhas: tuple[tuple[date, str, str, str], ...],
+    ordem_funcoes: tuple[str, ...],
+    datas_ceia: tuple[date, ...],
+    titulo: str,
+    subtitulo: str,
+    rodape: str,
+    gerada_em: date,
+) -> bytes:
+    """PNG da escala. Em cache porque o Streamlit reexecuta a página a cada clique.
+
+    Recebe só tuplas simples para que o cache consiga comparar as chamadas.
+    """
+    atribuicoes = [Atribuicao(data=d, culto=c, funcao=f, nome=n) for d, c, f, n in linhas]
+    grade = montar_grade(atribuicoes, list(ordem_funcoes), list(datas_ceia))
+    return renderizar_png(grade, titulo, subtitulo, rodape, gerada_em=gerada_em)
+
+
 def aba_whatsapp(base: BaseDados, mes: int, ano: int) -> None:
-    st.subheader("Texto para o WhatsApp")
+    st.subheader("Compartilhar no WhatsApp")
 
     atribuicoes = rascunho_atual(base)
     if not atribuicoes:
         st.info("Gere ou carregue uma escala primeiro.")
         return
 
-    col_a, col_b, col_c = st.columns([3, 1.3, 1.3])
+    col_a, col_b = st.columns([3, 1.3])
     rodape = col_a.text_input(
         "Rodapé (opcional)",
         value="Qualquer imprevisto, avise a coordenação com antecedência 🙏",
     )
-    mencoes = col_b.checkbox(
-        "Incluir (@ )",
-        value=True,
-        help="Deixa o `(@ )` pronto para você marcar cada pessoa na hora de enviar.",
-    )
-    apenas_um = col_c.checkbox("Gerar só de um culto")
+    apenas_um = col_b.checkbox("Gerar só de um culto", help="Útil como lembrete de véspera.")
 
     filtradas = atribuicoes
+    sufixo_arquivo = f"{ano}-{mes:02d}"
     if apenas_um:
         datas = sorted({a.data for a in atribuicoes if a.data})
         if datas:
@@ -716,17 +733,41 @@ def aba_whatsapp(base: BaseDados, mes: int, ano: int) -> None:
                 "Culto", options=datas, format_func=lambda d: formatar_data(d, com_ano=True)
             )
             filtradas = [a for a in atribuicoes if a.data == escolhida]
+            sufixo_arquivo = escolhida.isoformat()
 
+    ordem_funcoes = base.ordem_das_funcoes()
+    datas_ceia = config_efetiva(base).datas_ceia
+
+    aba_texto, aba_imagem = st.tabs(["📝 Texto", "🖼️ Imagem"])
+    with aba_texto:
+        secao_texto(filtradas, mes, ano, ordem_funcoes, datas_ceia, rodape, sufixo_arquivo)
+    with aba_imagem:
+        secao_imagem(filtradas, mes, ano, ordem_funcoes, datas_ceia, rodape, sufixo_arquivo)
+
+
+def secao_texto(
+    atribuicoes: list[Atribuicao],
+    mes: int,
+    ano: int,
+    ordem_funcoes: list[str],
+    datas_ceia: list[date],
+    rodape: str,
+    sufixo_arquivo: str,
+) -> None:
+    mencoes = st.checkbox(
+        "Incluir (@ )",
+        value=True,
+        help="Deixa o `(@ )` pronto para você marcar cada pessoa na hora de enviar.",
+    )
     texto = gerar_texto_whatsapp(
-        filtradas,
+        atribuicoes,
         mes=mes,
         ano=ano,
-        ordem_funcoes=base.ordem_das_funcoes(),
-        datas_ceia=config_efetiva(base).datas_ceia,
+        ordem_funcoes=ordem_funcoes,
+        datas_ceia=datas_ceia,
         rodape=rodape.strip(),
         mencoes=mencoes,
     )
-
     if not texto:
         st.info("Nada para publicar.")
         return
@@ -739,12 +780,59 @@ def aba_whatsapp(base: BaseDados, mes: int, ano: int) -> None:
     st.download_button(
         "⬇️ Baixar como .txt",
         data=texto.encode("utf-8"),
-        file_name=f"escala-{ano}-{mes:02d}.txt",
+        file_name=f"escala-{sufixo_arquivo}.txt",
         mime="text/plain",
     )
 
     with st.expander("👁️ Pré-visualização formatada"):
         st.markdown(texto.replace("*", "**").replace("\n", "  \n"))
+
+
+def secao_imagem(
+    atribuicoes: list[Atribuicao],
+    mes: int,
+    ano: int,
+    ordem_funcoes: list[str],
+    datas_ceia: list[date],
+    rodape: str,
+    sufixo_arquivo: str,
+) -> None:
+    linhas = tuple(
+        (a.data, a.culto, a.funcao, a.nome) for a in atribuicoes if a.data and a.nome
+    )
+    if not linhas:
+        st.info("Nada para desenhar.")
+        return
+
+    subtitulo = st.text_input(
+        "Subtítulo (opcional)",
+        placeholder="Ex.: nome da igreja ou do ministério",
+        key="imagem_subtitulo",
+    )
+    png = imagem_da_escala(
+        linhas,
+        tuple(ordem_funcoes),
+        tuple(sorted(datas_ceia)),
+        f"Escala — {competencia(mes, ano)}",
+        subtitulo.strip(),
+        rodape.strip(),
+        date.today(),
+    )
+
+    col_a, col_b = st.columns([1, 2], vertical_alignment="center")
+    col_a.download_button(
+        "⬇️ Baixar imagem (PNG)",
+        data=png,
+        file_name=f"escala-{sufixo_arquivo}.png",
+        mime="image/png",
+        type="primary",
+        use_container_width=True,
+    )
+    col_b.caption(
+        "No WhatsApp, envie em **HD** ou como **documento** para não perder a "
+        "nitidez — como foto comum, o app comprime a imagem."
+    )
+    st.image(png)
 
 
 def aba_trocas(base: BaseDados) -> None:
