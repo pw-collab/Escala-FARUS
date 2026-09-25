@@ -9,44 +9,24 @@ from __future__ import annotations
 
 from datetime import date
 
-from .modelos import CULTO_ORACAO, Atribuicao
-from .textos import (
-    competencia,
-    formatar_data,
-    nome_dia_semana,
-    normalizar,
-)
+from .grade import ColunaCulto, montar_grade
+from .modelos import CULTO_DOMINGO, CULTO_EVENTO, CULTO_ORACAO, Atribuicao
+from .textos import competencia, formatar_data, nome_dia_semana
 
 
-def _titulo_do_culto(
-    data: date, rotulo: str, e_ceia: bool
-) -> str:
+def _titulo_do_culto(coluna: ColunaCulto) -> str:
     """Cabeçalho de cada bloco, em negrito do WhatsApp."""
-    chave = normalizar(rotulo)
-    dia_semana = nome_dia_semana(data)
-    data_curta = formatar_data(data)
+    dia_semana = nome_dia_semana(coluna.data)
+    data_curta = formatar_data(coluna.data)
 
-    if chave.startswith("evento"):
-        nome = rotulo.split(":", 1)[1].strip() if ":" in rotulo else "Evento"
-        return f"*{nome} — {dia_semana}, {data_curta}*"
-
-    if chave.startswith(normalizar(CULTO_ORACAO)) or "oracao" in chave:
+    if coluna.tipo == CULTO_EVENTO:
+        return f"*{coluna.nome_evento} — {dia_semana}, {data_curta}*"
+    if coluna.tipo == CULTO_ORACAO:
         return f"*Culto de Oração — {dia_semana}, {data_curta}*"
-
-    if chave.startswith("domingo") or data.weekday() == 6:
-        sufixo = " (Ceia)" if e_ceia else ""
+    if coluna.tipo == CULTO_DOMINGO:
+        sufixo = " (Ceia)" if coluna.e_ceia else ""
         return f"*Domingo, {data_curta}{sufixo}*"
-
-    rotulo_limpo = rotulo or dia_semana
-    return f"*{rotulo_limpo} — {dia_semana}, {data_curta}*"
-
-
-def _ordem_da_funcao(nome: str, ordem_funcoes: list[str]) -> int:
-    alvo = normalizar(nome)
-    for indice, funcao in enumerate(ordem_funcoes):
-        if normalizar(funcao) == alvo:
-            return indice
-    return len(ordem_funcoes)
+    return f"*{coluna.rotulo or dia_semana} — {dia_semana}, {data_curta}*"
 
 
 def formatar_nomes(nomes: list[str], mencoes: bool = True) -> str:
@@ -75,10 +55,8 @@ def gerar_texto_whatsapp(
     As funções saem na ordem da aba `Funções`; funções que não estão no
     catálogo (extras de evento) vão para o fim, em ordem de aparição.
     """
-    ordem_funcoes = ordem_funcoes or []
-    ceias = set(datas_ceia or [])
-    validas = [a for a in atribuicoes if a.data and a.nome]
-    if not validas:
+    grade = montar_grade(atribuicoes, ordem_funcoes, datas_ceia)
+    if grade.vazia:
         return ""
 
     if titulo is None:
@@ -87,37 +65,15 @@ def gerar_texto_whatsapp(
         else:
             titulo = "*Escala*"
 
-    # Agrupa por (data, rótulo do culto) preservando a ordem cronológica.
-    grupos: dict[tuple[date, str], dict[str, list[str]]] = {}
-    ordem_aparicao: dict[tuple[date, str], list[str]] = {}
-    for registro in validas:
-        chave_culto = (registro.data, registro.culto or "")
-        funcoes = grupos.setdefault(chave_culto, {})
-        aparicao = ordem_aparicao.setdefault(chave_culto, [])
-        if registro.funcao not in funcoes:
-            funcoes[registro.funcao] = []
-            aparicao.append(registro.funcao)
-        if registro.nome not in funcoes[registro.funcao]:
-            funcoes[registro.funcao].append(registro.nome)
-
     linhas: list[str] = [titulo]
 
-    for chave_culto in sorted(grupos, key=lambda c: (c[0], c[1])):
-        data, rotulo = chave_culto
-        funcoes = grupos[chave_culto]
-        aparicao = ordem_aparicao[chave_culto]
-
-        e_ceia = data in ceias or any("ceia" in normalizar(f) for f in funcoes)
-
+    for indice, coluna in enumerate(grade.colunas):
         linhas.append("")
-        linhas.append(_titulo_do_culto(data, rotulo, e_ceia))
+        linhas.append(_titulo_do_culto(coluna))
         linhas.append("")
-
-        def posicao(funcao: str) -> tuple[int, int]:
-            return (_ordem_da_funcao(funcao, ordem_funcoes), aparicao.index(funcao))
-
-        for funcao in sorted(funcoes, key=posicao):
-            linhas.append(f"* {funcao}: {formatar_nomes(funcoes[funcao], mencoes)}")
+        for funcao in grade.funcoes_da_coluna(indice):
+            nomes = formatar_nomes(grade.nomes(funcao, indice), mencoes)
+            linhas.append(f"* {funcao}: {nomes}")
 
     if rodape:
         linhas.append("")

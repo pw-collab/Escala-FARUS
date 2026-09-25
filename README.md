@@ -17,7 +17,7 @@ Google Sheets (banco de dados)
         ▼
 App em Python (Streamlit)  ──►  link fixo, acessível de qualquer lugar
         │
-        └──►  texto formatado para colar no WhatsApp
+        └──►  texto e imagem da escala para mandar no WhatsApp
 ```
 
 A planilha continua sendo a fonte da verdade: nada muda na forma como os dados
@@ -30,7 +30,8 @@ dos voluntários são mantidos. O app lê, sugere a escala e grava de volta.
    Fusion, culto de oração e eventos.
 2. **Gerar escala** → revisar e ajustar o rascunho na tabela →
    **Salvar na planilha**.
-3. **Texto para o WhatsApp** → copiar → colar no grupo.
+3. **WhatsApp** → copiar o texto e colar no grupo, e/ou baixar a imagem da
+   escala em tabela (PNG) para mandar junto.
 4. **Confirmar publicação** → grava na aba `Histórico`, fechando o ciclo de
    rodízio do mês.
 5. Trocas ao longo do mês: registrar em **Trocas** e clicar em **Aplicar
@@ -207,12 +208,15 @@ escala/
   calendario.py        cultos do mês e funções de cada culto
   motor.py             algoritmo de rodízio
   trocas.py            aplicação das trocas
+  grade.py             visão em tabela (cultos × funções), base do texto e da imagem
   whatsapp.py          geração do texto
+  imagem.py            desenho da escala em PNG (Pillow)
+  fontes/              Liberation Sans, embutida para a imagem (licença SIL OFL)
   repositorio.py       contrato de acesso + implementação em memória
   sheets.py            implementação sobre o Google Sheets
   demo.py              planilha de demonstração
   servico.py           fachada usada pela interface
-tests/                 170 testes, sem rede e sem credenciais
+tests/                 testes sem rede e sem credenciais
 ```
 
 A lógica de negócio não depende de Streamlit nem de rede: dá para testar tudo
@@ -245,3 +249,24 @@ Cada função vira um item de lista; os nomes são separados por travessão. O
 `(@ )` fica pronto para você tocar dentro do parêntese no WhatsApp e escolher a
 pessoa — a menção é feita na hora do envio, sem precisar cadastrar telefone
 nenhum. Dá para desligar as menções na aba **WhatsApp**.
+
+---
+
+## Imagem da escala
+
+Na aba **WhatsApp → Imagem**, o app desenha o mês como tabela: uma coluna por
+culto (em ordem de data, incluindo oração e eventos) e uma linha por função, na
+ordem da aba `Funções`. O cabeçalho de cada culto tem cor própria — Ceia,
+domingo comum, culto de oração e evento — e células vazias aparecem como `—`.
+
+A imagem sai do mesmo rascunho do texto, com as mesmas edições manuais, então os
+dois nunca divergem. Há um campo opcional de subtítulo (nome da igreja ou do
+ministério), e o rodapé é o mesmo do texto — emoji ficam de fora, porque a
+fonte não os desenha. Com **Gerar só de um culto** marcado, a imagem vira uma
+coluna só, útil como lembrete de véspera.
+
+A imagem é gerada em alta resolução. No WhatsApp, envie em **HD** ou como
+**documento** para não perder a nitidez.
+
+A fonte (Liberation Sans) vai junto no repositório, em `escala/fontes/`, porque
+o servidor do Streamlit Cloud não garante fontes instaladas.
