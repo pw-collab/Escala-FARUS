@@ -12,6 +12,7 @@ from escala.dados import (
     ConfiguracoesMes,
     atualizar_aba_config,
     carregar_base,
+    domingos_padrao_da_funcao,
 )
 from escala.modelos import EscalaManual, Evento
 from escala.planilha import Aba, MapaColunas, Planilha
@@ -358,3 +359,40 @@ def test_ciclo_gravar_e_reler_preserva_a_configuracao():
     assert relida.eventos[0].nome == "Vigília"
     assert relida.eventos[0].funcoes_extras == ["Recepção"]
     assert relida.nomes_manuais(date(2026, 3, 1), "Louvor") == ["Ana", "Bruno"]
+
+
+def test_padrao_do_geracao_luz_sao_os_tres_ultimos_domingos():
+    # Março/2026 tem 5 domingos (1, 8, 15, 22, 29); Fevereiro/2026 tem 4.
+    assert domingos_padrao_da_funcao("Geração Luz", 2026, 3) == [
+        date(2026, 3, 15), date(2026, 3, 22), date(2026, 3, 29)
+    ]
+    assert domingos_padrao_da_funcao("Geração Luz (09 a 12)", 2026, 2) == [
+        date(2026, 2, 8), date(2026, 2, 15), date(2026, 2, 22)
+    ]
+
+
+def test_padrao_do_fusion_e_nenhum_domingo():
+    assert domingos_padrao_da_funcao("Fusion", 2026, 3) == []
+
+
+def test_data_fixa_com_linha_vazia_nao_gera_aviso():
+    base = base_de(
+        _planilha(
+            [["Mês/Ano", "03/2026"], ["Data da Ceia", "nenhuma"], ["Data do Fusion", ""]],
+            funcoes_linhas=[["Fusion", "Domingo", "1", "1", "Não", "Sim"]],
+        )
+    )
+    assert base.config.datas_da_funcao("Fusion") == []
+    assert not any("data fixa" in a for a in base.avisos)
+
+
+def test_data_fixa_aceita_varios_domingos():
+    base = base_de(
+        _planilha(
+            [["Mês/Ano", "03/2026"], ["Data do Geração Luz", "15/03; 22/03; 29/03"]],
+            funcoes_linhas=[["Geração Luz", "Domingo", "1", "1", "Não", "Sim"]],
+        )
+    )
+    assert base.config.datas_da_funcao("Geração Luz") == [
+        date(2026, 3, 15), date(2026, 3, 22), date(2026, 3, 29)
+    ]

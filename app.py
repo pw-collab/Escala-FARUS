@@ -22,6 +22,7 @@ from escala.dados import (
     ABA_HISTORICO,
     BaseDados,
     ConfiguracoesMes,
+    domingos_padrao_da_funcao,
 )
 from escala.demo import repositorio_demo
 from escala.grade import montar_grade
@@ -369,7 +370,8 @@ def _padroes_do_mes(base: BaseDados, mes: int, ano: int) -> ConfiguracoesMes:
     """Valores iniciais dos campos da tela.
 
     Vêm da planilha quando ela já está no mês escolhido; caso contrário, o mês
-    começa do zero com a Ceia no 1º domingo. Os campos que não aparecem na tela
+    começa do zero com a Ceia no 1º domingo e as salas extras (funções de data
+    fixa) nos domingos padrão de cada uma. Os campos que não aparecem na tela
     (cobertura coringa, preenchimento até o máximo) são sempre herdados.
     """
     if base.config.mes == mes and base.config.ano == ano:
@@ -384,6 +386,10 @@ def _padroes_do_mes(base: BaseDados, mes: int, ano: int) -> ConfiguracoesMes:
     domingos = domingos_do_mes(ano, mes)
     if domingos:
         padroes.datas_ceia = [domingos[0]]
+    for funcao in base.funcoes_de_data_fixa():
+        datas = domingos_padrao_da_funcao(funcao.nome, ano, mes)
+        if datas:
+            padroes.datas_por_funcao[funcao.chave] = datas
     return padroes
 
 
@@ -432,21 +438,26 @@ def painel_configuracao(base: BaseDados) -> ConfiguracoesMes:
 
     st.markdown("##### Cultos de domingo")
     nome_manual = FUNCAO_ESCALA_MANUAL if base.funcao_por_nome(FUNCAO_ESCALA_MANUAL) else ""
-    pesos = [1.5, 0.7, 1.0, 3.5]
+    # Salas extras (funções de data fixa) ganham uma coluna cada, como a Ceia.
+    fixas = base.funcoes_de_data_fixa()
+    pesos = [1.5, 0.7, *([0.9] * len(fixas)), 1.0, 3.5]
+    col_sem = 2 + len(fixas)
+    col_manual = col_sem + 1
 
     titulos = st.columns(pesos)
     titulos[0].caption("Culto")
     titulos[1].caption("Ceia")
-    titulos[2].caption("Sem culto")
+    for indice, funcao in enumerate(fixas):
+        titulos[2 + indice].caption(funcao.nome)
+    titulos[col_sem].caption("Sem culto")
     if nome_manual:
-        titulos[3].caption(f"{nome_manual} — escala manual (vazio = automático)")
+        titulos[col_manual].caption(f"{nome_manual} — escala manual (vazio = automático)")
 
-    ativos: list[date] = []
     for dia in domingos:
         colunas = st.columns(pesos, vertical_alignment="center")
         colunas[0].markdown(f"**{formatar_data(dia)}** · {nome_dia_semana(dia)}")
 
-        sem_culto = colunas[2].toggle(
+        sem_culto = colunas[col_sem].toggle(
             "Sem culto",
             value=dia in padroes.datas_sem_culto,
             key=f"cfg_sem_{marca}_{dia.day}",
@@ -459,13 +470,24 @@ def painel_configuracao(base: BaseDados) -> ConfiguracoesMes:
             label_visibility="collapsed",
             disabled=sem_culto,
         )
+        salas = [
+            funcao
+            for indice, funcao in enumerate(fixas)
+            if colunas[2 + indice].checkbox(
+                funcao.nome,
+                value=dia in padroes.datas_da_funcao(funcao.nome),
+                key=f"cfg_fixa_{marca}_{funcao.chave}_{dia.day}",
+                label_visibility="collapsed",
+                disabled=sem_culto,
+            )
+        ]
 
         if nome_manual:
             opcoes = _elegiveis_para(base, nome_manual, dia)
             anteriores = [
                 n for n in padroes.nomes_manuais(dia, nome_manual) if n in opcoes
             ]
-            escolhidos = colunas[3].multiselect(
+            escolhidos = colunas[col_manual].multiselect(
                 nome_manual,
                 options=opcoes,
                 default=anteriores,
@@ -482,28 +504,14 @@ def painel_configuracao(base: BaseDados) -> ConfiguracoesMes:
         if sem_culto:
             config.datas_sem_culto.append(dia)
         else:
-            ativos.append(dia)
             if ceia:
                 config.datas_ceia.append(dia)
+            for funcao in salas:
+                config.datas_por_funcao.setdefault(funcao.chave, []).append(dia)
 
     st.markdown("##### Datas especiais")
-    fixas = base.funcoes_de_data_fixa()
-    colunas = st.columns(max(len(fixas) + 1, 2))
-
-    for indice, funcao in enumerate(fixas):
-        opcoes: list[date | None] = [None, *ativos]
-        atual = padroes.data_da_funcao(funcao.nome)
-        escolha = colunas[indice].selectbox(
-            f"Data do {funcao.nome}",
-            options=opcoes,
-            index=opcoes.index(atual) if atual in opcoes else 0,
-            format_func=lambda d: "— não haverá —" if d is None else formatar_data(d),
-            key=f"cfg_fixa_{marca}_{funcao.chave}",
-        )
-        if escolha is not None:
-            config.datas_por_funcao[funcao.chave] = [escolha]
-
-    oracao = colunas[len(fixas)].date_input(
+    colunas = st.columns(2)
+    oracao = colunas[0].date_input(
         "Data do culto de oração",
         value=padroes.datas_oracao[0] if padroes.datas_oracao else None,
         format="DD/MM/YYYY",
@@ -1071,8 +1079,8 @@ Cada escolha realimenta o rodízio na hora — por isso a mesma pessoa não se
 repete em cultos seguidos quando existe outra apta.
 
 ##### Fluxo do mês
-1. **Gerar escala do mês** → confira as configurações na tela (mês, Ceia por
-   domingo, datas especiais, eventos) → **Gerar escala**.
+1. **Gerar escala do mês** → confira as configurações na tela (mês, Ceia e
+   salas extras por domingo, culto de oração, eventos) → **Gerar escala**.
 2. Revise e ajuste o rascunho → **Salvar na planilha**.
 3. **Texto para o WhatsApp** → copiar → colar no grupo.
 4. **Publicar** → grava no `{ABA_HISTORICO}` e fecha o rodízio do mês.
