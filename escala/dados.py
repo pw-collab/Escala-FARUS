@@ -181,6 +181,22 @@ CAMPO_SEM_CULTO = "Datas sem culto"
 CAMPO_EVENTO = "Evento"
 CAMPO_MANUAL = "Escalação manual"
 
+# Domingos em que cada função de data fixa acontece num mês novo, antes de
+# qualquer ajuste na tela (a Ceia tem padrão próprio: 1º domingo). A chave é o
+# começo do nome normalizado; funções fora daqui começam sem nenhuma data.
+DOMINGOS_PADRAO_POR_FUNCAO: dict[str, slice] = {
+    "geracao luz": slice(-3, None),  # 3 últimos domingos
+}
+
+
+def domingos_padrao_da_funcao(funcao: str, ano: int, mes: int) -> list[date]:
+    """Domingos sugeridos para uma função de data fixa num mês ainda sem configuração."""
+    chave = normalizar(funcao)
+    for prefixo, fatia in DOMINGOS_PADRAO_POR_FUNCAO.items():
+        if chave.startswith(prefixo):
+            return domingos_do_mes(ano, mes)[fatia]
+    return []
+
 
 @dataclass
 class ConfiguracoesMes:
@@ -722,7 +738,14 @@ def _diagnosticar(base: BaseDados) -> list[str]:
     for funcao in base.funcoes:
         if not funcao.data_fixa:
             continue
-        if not base.config.datas_da_funcao(funcao.nome):
+        if base.config.datas_da_funcao(funcao.nome):
+            continue
+        # Linha presente mas vazia = "não haverá neste mês", decisão consciente.
+        tem_linha = any(
+            _funcao_de_data_fixa(campo, base.funcoes) == funcao.chave
+            for campo, _ in base.config.itens
+        )
+        if not tem_linha:
             avisos.append(
                 f"Função `{funcao.nome}` está marcada como de data fixa, mas não há "
                 f"linha `Data do {funcao.nome}` em `{ABA_CONFIG}` — ela não será escalada."

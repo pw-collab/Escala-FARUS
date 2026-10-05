@@ -19,6 +19,7 @@ from .dados import (
     ABA_VOLUNTARIOS,
     CABECALHOS_PADRAO,
     carregar_base,
+    domingos_padrao_da_funcao,
 )
 from .planilha import Aba, Planilha
 from .textos import (
@@ -114,13 +115,16 @@ def _aba_config(mes: int, ano: int) -> Aba:
     sextas = dias_do_mes_na_semana(ano, mes, 4)
     data_oracao = quartas[2] if len(quartas) > 2 else quartas[-1]
     data_evento = sextas[-1] if sextas else data_oracao
+    datas_geracao_luz = "; ".join(
+        formatar_data_iso(d) for d in domingos_padrao_da_funcao("Geração Luz", ano, mes)
+    )
 
     linhas = [
         ["Mês/Ano", competencia(mes, ano)],
         ["Data da Ceia", "1º domingo"],
         ["Data do culto de oração", formatar_data_iso(data_oracao)],
-        ["Data do Geração Luz", "2º domingo"],
-        ["Data do Fusion", "3º domingo"],
+        ["Data do Geração Luz", datas_geracao_luz],
+        ["Data do Fusion", ""],
         ["Datas sem culto", ""],
         ["Funções cobertas por coringa", "Abertura; Oferta"],
         ["Preencher até a quantidade máxima", "Sim"],

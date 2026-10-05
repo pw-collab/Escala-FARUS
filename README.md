@@ -25,9 +25,10 @@ dos voluntários são mantidos. O app lê, sugere a escala e grava de volta.
 
 ## Fluxo do mês
 
-1. **Gerar escala do mês** → abre a tela de configuração: mês/ano, Ceia e escala
-   manual do Louvor por domingo, domingos sem culto, datas do Geração Luz e do
-   Fusion, culto de oração e eventos.
+1. **Gerar escala do mês** → abre a tela de configuração: mês/ano, Ceia, salas
+   extras (Geração Luz, Fusion) e escala manual do Louvor por domingo, domingos
+   sem culto, culto de oração e eventos. Num mês novo a Ceia vem marcada no 1º
+   domingo, o Geração Luz nos 3 últimos e o Fusion em nenhum.
 2. **Gerar escala** → revisar e ajustar o rascunho na tabela →
    **Salvar na planilha**.
 3. **WhatsApp** → copiar o texto e colar no grupo, e/ou baixar a imagem da
@@ -115,8 +116,8 @@ para criar, remover ou renomear uma função, basta editar esta aba.
 | `Mês/Ano` | `Março/2026` ou `03/2026` | competência da escala |
 | `Data da Ceia` | `1º domingo` ou `01/03; 15/03` | em branco = 1º domingo; `nenhuma` = sem Ceia |
 | `Data do culto de oração` | `3ª quarta` ou `18/03` | aceita várias datas separadas por `;` |
-| `Data do Geração Luz` | `2º domingo` | uma linha `Data do …` para cada função de data fixa |
-| `Data do Fusion` | `3º domingo` | |
+| `Data do Geração Luz` | `08/03; 15/03; 22/03` | uma linha `Data do …` para cada função de data fixa; aceita várias datas separadas por `;` |
+| `Data do Fusion` | em branco | em branco = não haverá neste mês |
 | `Datas sem culto` | `29/03` | pula essas datas |
 | `Funções cobertas por coringa` | `Abertura; Oferta` | **não fica na tela** — padrão se a linha não existir |
 | `Preencher até a quantidade máxima` | `Sim` | **não fica na tela** — `Não` preenche só o mínimo |

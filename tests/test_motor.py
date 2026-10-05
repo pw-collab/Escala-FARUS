@@ -567,3 +567,20 @@ def test_demo_gera_mes_completo_sem_pendencias(demo):
     # Ninguém sobrecarregado nem esquecido.
     assert max(carga.values()) - min(carga.values()) <= 4
     assert voluntarios_nao_escalados(demo, resultado.atribuicoes) == []
+
+
+def test_funcao_de_data_fixa_em_varios_domingos():
+    base = montar(
+        voluntarios=[
+            ["Ana", "", "Sim", "Geração Luz", ""],
+            ["Bia", "", "Sim", "Geração Luz", ""],
+        ],
+        funcoes=[["Geração Luz", "Domingo", "1", "1", "Não", "Sim"]],
+        config=[
+            ["Mês/Ano", "03/2026"],
+            ["Data da Ceia", "nenhuma"],
+            ["Data do Geração Luz", "15/03; 22/03; 29/03"],
+        ],
+    )
+    resultado = gerar_escala(base, 3, 2026)
+    assert sorted(a.data.day for a in resultado.atribuicoes) == [15, 22, 29]
